@@ -71,11 +71,62 @@ const resendEmailVerification = asyncHandler(async (req, res) => {
 
 
 const refreshAccessToken = asyncHandler(async (req, res) => {
-  const { username, email, password, role } = req.body
+  // 1. check if refresh token is present
+  const incomingRefreshToken = req.cookies.refreshToken || req.body.refreshToken;
+
+  if (!incomingRefreshToken) {
+    throw new ApiError(400, "Refresh token is required");
+  }
+
+  // if present, then verify that refresh token is matching
+  const refreshDecoded = jwt.verify(incomingRefreshToken, process.env.REFRESH_TOKEN_SECRET);
+
+  if (!refreshDecoded) {
+    throw new ApiError(400, "Invalid refresh token");
+  }
+
+  const user = await User.findOne({ _id: refreshDecoded.id });
+
+  if (incomingRefreshToken !== user.refreshToken) {
+    throw new ApiError(400, "Invalid refresh token");
+  }
+
+  // 2. generate new access token and refresh token
+  const newAccessToken = user.generateAccessToken();
+  const newRefreshToken = user.generateRefreshToken();
+
+  const options = {
+    httpOnly: true,
+    secure: true,
+  }
+
+  res
+    .cookie("accessToken", newAccessToken, options)
+    .cookie("refreshToken", newRefreshToken, options)
+
+  // 3. send response
+  res.status(200).json(new ApiResponse(200, { message: "Refresh token is valid" }, { accessToken: newAccessToken, refreshToken: newRefreshToken }));
+
+
 });
 
 const forgotPassword = asyncHandler(async (req, res) => {
-  const { username, email, password, role } = req.body
+  const { email } = req.body;
+
+  // 2. check if user exists
+  const user = await User.findOne({ email });
+
+  if (!user) {
+    throw new ApiError(400, "User not found");
+  }
+
+  const { unHashedToken, tokenExpiry } = user.generateTemporaryToken()
+
+  user.forgotPasswordToken = unHashedToken;
+  user.forgotPasswordExpiry = tokenExpiry;
+  await user.save();
+
+
 });
 
 const changeCurrentPassword = asyncHandler(async (req, res) => {
@@ -84,7 +135,9 @@ const changeCurrentPassword = asyncHandler(async (req, res) => {
 
 
 const getCurrentUser = asyncHandler(async (req, res) => {
-  const { username, email, password, role } = req.body
+  const user = await User.findById(req.user.id).select("-password -refreshToken");
+  res.status(200).json(new ApiResponse(200, { message: "User found successfully" }, { user: user }));
+
 });
 
 const loginUser = asyncHandler(async (req, res) => {
