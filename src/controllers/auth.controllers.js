@@ -62,7 +62,19 @@ const verifyEmail = asyncHandler(async (req, res) => {
 });
 
 const logOut = asyncHandler(async (req, res) => {
-  const { username, email, password, role } = req.body
+  await User.findOneAndUpdate({ _id: req.user._id }, { $unset: { refreshToken: 1 } }, { new: true })
+
+
+  const options = {
+    httpOnly: true,
+    secure: true,
+  }
+
+  res.clearCookie("accessToken", options);
+  res.clearCookie("refreshToken", options);
+
+  res.status(200).json(new ApiResponse(200, { message: "User logged out successfully" }));
+
 });
 
 const resendEmailVerification = asyncHandler(async (req, res) => {
@@ -126,18 +138,61 @@ const forgotPassword = asyncHandler(async (req, res) => {
   user.forgotPasswordExpiry = tokenExpiry;
   await user.save();
 
+  await sendEmail({
+    email: user.email,
+    subject: 'Forgot Password',
+    mailGenContent: resetPasswordMailGenContent('username', `http://localhost:5000/api/v1/users/reset-password/${user.forgotPasswordToken}`)
+  })
+
+
+  res.status(200).json(new ApiResponse(200, { message: "Password reset link sent successfully" }));
 
 });
 
 const changeCurrentPassword = asyncHandler(async (req, res) => {
-  const { username, email, password, role } = req.body
+  const { password, oldPassword } = req.body;
+
+  const user = await User.findById(req.user.id).select("-password -refreshToken");
+
+  const isMatch = await user.isPasswordMatched(oldPassword);
+
+  if (!isMatch) {
+    throw new ApiError(400, "Old password is incorrect");
+  }
+
+  user.password = password;
+  await user.save({ validateBeforeSave: false });
+
+  res.status(200).json(new ApiResponse(200, { message: "Password changed successfully" }));
+
 });
 
+const resetPassword = asyncHandler(async (req, res) => {
+  const { token } = req.params;
+  const { password } = req.body;
+
+  // check if the token is present or not
+  if (!token) {
+    throw new ApiError(400, "Token is required");
+  }
+
+  const user = await User.findOne({ forgotPasswordToken: token });
+
+  if (!user) {
+    throw new ApiError(400, "Invalid token");
+  }
+
+  user.password = password;
+  user.forgotPasswordToken = undefined;
+  user.forgotPasswordExpiry = undefined;
+  await user.save();
+
+  res.status(200).json(new ApiResponse(200, { message: "Password reset successfully" }));
+})
 
 const getCurrentUser = asyncHandler(async (req, res) => {
   const user = await User.findById(req.user.id).select("-password -refreshToken");
   res.status(200).json(new ApiResponse(200, { message: "User found successfully" }, { user: user }));
-
 });
 
 const loginUser = asyncHandler(async (req, res) => {
@@ -187,4 +242,15 @@ const loginUser = asyncHandler(async (req, res) => {
 });
 
 
-export { registerUser, verifyEmail, logOut, resendEmailVerification, refreshAccessToken, forgotPassword, changeCurrentPassword, getCurrentUser, loginUser }
+export {
+  registerUser,
+  verifyEmail,
+  logOut,
+  resendEmailVerification,
+  refreshAccessToken,
+  forgotPassword,
+  changeCurrentPassword,
+  getCurrentUser,
+  loginUser,
+  resetPassword
+}
